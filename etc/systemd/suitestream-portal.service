@@ -1,0 +1,12 @@
+[Unit]
+Description=Suitestream Captive Portal
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/suitestream/portal
+ExecStart=/usr/bin/node server.js
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target

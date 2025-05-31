@@ -1,0 +1,12 @@
+[Unit]
+Description=Suitestream First‐boot & Every‐boot Orchestrator
+After=multi-user.target docker.service
+
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/suitestream-setup.sh
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target

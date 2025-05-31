@@ -1,0 +1,5 @@
+
+NetComm 6292
+Telstra0663B7
+Telstra0663B7_EXT
+\x00\x00\x00\x00\x00\x00\x00\x00\x00
