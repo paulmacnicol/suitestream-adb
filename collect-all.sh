@@ -108,3 +108,4 @@ echo "-- Copying /opt/suitestream/portal/ssids.txt (if present) → $REPO_DIR/op
 if [ -f /opt/suitestream/portal/ssids.txt ]; then
   cp /opt/suitestream/portal/ssids.txt "$REPO_DIR/opt-suitestream/portal/ssids.txt"
 else
+fi

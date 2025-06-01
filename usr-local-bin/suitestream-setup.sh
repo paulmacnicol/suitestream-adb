@@ -9,14 +9,14 @@ echo "\n---- suitestream-setup start: $(date) ----"
 # 1) Test for Internet connectivity
 if ping -c1 -W1 8.8.8.8 >/dev/null 2>&1; then
   echo "↗ Internet reachable → starting Docker stack"
-  docker compose -f /opt/suitestream/docker-compose.yml up -d \
+  docker-compose -f /home/gc/suitestream-adb/docker-compose.yml up -d \
     || echo "⚠ docker compose up failed; will retry on next boot"
   exit 0
 fi
 
 echo "⛔ No Internet → stopping containers & preparing AP"
 
-docker compose -f /opt/suitestream/docker-compose.yml down || true
+docker-compose -f /home/gc/suitestream-adb/docker-compose.yml down || true
 
 # -- tell NM not to touch wlan0 during our AP phase --
 nmcli device set wlan0 managed no || true
