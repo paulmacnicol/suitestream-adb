@@ -1,15 +1,43 @@
 ################################################################################
 # /home/gc/suitestream-adb/controller/Dockerfile
 #
-# Build a super‐simple Nginx container that serves our index.html as “Hello World.”
-# We'll run this container in privileged mode and mount the host’s root filesystem
-# to /host so that from inside you can chroot or otherwise run host commands if needed.
+# 1) Base: Node 16 on Debian‐slim
+# 2) Installs:
+#    • android-tools-adb     → “adb” binary
+#    • cec-utils             → “cec-client” binary
+#    • iproute2, curl        → utilities
+# 3) Copies in your proxy code:
+#      - package.json       (for npm install)
+#      - index.js, index.html (if you still need it), etc.
+# 4) Listens on PORT 80 by default
 ################################################################################
 
-# Base off the official tiny Nginx Linux image
-FROM nginx:alpine
+FROM node:16-bullseye-slim
 
-# Copy our static “Hello World” page into Nginx’s default www directory
-COPY index.html /usr/share/nginx/html/index.html
+# 1) Install ADB + CEC utilities + extras
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      android-tools-adb \
+      cec-utils       \
+      iproute2        \
+      curl            \
+    && rm -rf /var/lib/apt/lists/*
 
-# (No ENTRYPOINT override—Nginx’s default is fine: it will run in the foreground.)
+# 2) Create app directory
+WORKDIR /usr/src/app
+
+# 3) Copy only package.json and install dependencies
+COPY package.json ./
+RUN npm install
+
+# 4) Copy the rest of your files (index.js, index.html if needed, etc.)
+COPY . .
+
+# 5) Expose 80 because you already have something on port 80
+EXPOSE 80
+
+# 6) Ensure the code reads PORT from env (default 80)
+ENV PORT=80
+
+# 7) Default command: run your proxy server
+CMD ["node", "index.js"]

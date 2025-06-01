@@ -2,37 +2,20 @@ version: "3.8"
 
 services:
 
-  ###──────────────────────────────────────────────────────────────────────────────
+  ###────────────────────────────────────────────────────────────────────────────
   # 1) kiosk1: chromium in kiosk mode on DISPLAY=:0.0 (first HDMI)
   kiosk1:
     build:
       context: ./kiosk
       dockerfile: Dockerfile
-
-    network_mode: host       # allow DISPLAY=:0.0 to reach Pi’s X server
+    network_mode: host
     privileged: true
-
-    # ──────────────────────────────────────────────────────────────────────────────
-    # Uncomment to give container direct ALSA access:
-    # devices:
-    #   - "/dev/snd:/dev/snd"
-    # group_add:
-    #   - audio
-
     volumes:
       - ./data/kiosk1-profile:/home/kiosk/.config/chromium
       - /tmp/.X11-unix:/tmp/.X11-unix
-
-      # If you want to mount /etc/asound.conf for audio testing, uncomment:
-      # - /etc/asound.conf:/etc/asound.conf:ro
-
     environment:
-      - DISPLAY=:0.0            # ← point Chromium at X screen 0 (HDMI0)
+      - DISPLAY=:0.0
       - LIBGL_ALWAYS_SOFTWARE=1
-
-      # Uncomment to set ALSA output to “both1”:
-      # - AUDIODEV=both1
-
     command: >
       chromium
         --noerrdialogs
@@ -41,38 +24,20 @@ services:
         --kiosk 
           "https://soundscreen.soundcheckvn.com/connect?screen=1"
 
-
-  ###──────────────────────────────────────────────────────────────────────────────
+  ###────────────────────────────────────────────────────────────────────────────
   # 2) kiosk2: chromium in kiosk mode on DISPLAY=:0.1 (second HDMI)
   kiosk2:
     build:
       context: ./kiosk
       dockerfile: Dockerfile
-
     network_mode: host
     privileged: true
-
-    # ──────────────────────────────────────────────────────────────────────────────
-    # Uncomment to give container direct ALSA access:
-    # devices:
-    #   - "/dev/snd:/dev/snd"
-    # group_add:
-    #   - audio
-
     volumes:
       - ./data/kiosk2-profile:/home/kiosk/.config/chromium
       - /tmp/.X11-unix:/tmp/.X11-unix
-
-      # Uncomment if you want to mount your host’s /etc/asound.conf:
-      # - /etc/asound.conf:/etc/asound.conf:ro
-
     environment:
-      - DISPLAY=:0.1            # ← point Chromium at X screen 1 (HDMI1)
+      - DISPLAY=:0.1
       - LIBGL_ALWAYS_SOFTWARE=1
-
-      # Uncomment to set ALSA output to “both2”:
-      # - AUDIODEV=both2
-
     command: >
       chromium
         --noerrdialogs
@@ -81,20 +46,28 @@ services:
         --kiosk 
           "https://soundscreen.soundcheckvn.com/connect?screen=2"
 
-
-  ###──────────────────────────────────────────────────────────────────────────────
-  # 3) controller: a simple “Hello World” Nginx on port 8080
+  ###────────────────────────────────────────────────────────────────────────────
+  # 3) controller: Node‐based proxy listening on port 8080
   controller:
     build:
       context: ./controller
       dockerfile: Dockerfile
-
-    ports:
-      - "8080:80"
-
+    container_name: suitestream-device
+    # host networking so:
+    #  • HTTP on port 8080 is directly the Pi’s port 8080
+    #  • socket.io connects without extra NAT
+    network_mode: host
     privileged: true
+    devices:
+      - /dev/vchiq:/dev/vchiq
+      - /dev/cec0:/dev/cec0
+      - /dev/bus/usb:/dev/bus/usb
     volumes:
-      # Mount host’s root so you can poke around from inside (if needed):
       - "/:/host:rw"
-      # If you ever need Docker CLI inside, uncomment:
-      # - "/var/run/docker.sock:/var/run/docker.sock"
+    environment:
+      # Point to your central server
+      - CENTRAL_URL=https://soundscreen.soundcheckvn.com
+      - CONNECT_URL=https://soundscreen.soundcheckvn.com/connect
+      - POLL_INTERVAL_MS=2000
+      - PORT=8080
+    restart: unless-stopped

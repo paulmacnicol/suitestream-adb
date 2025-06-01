@@ -1,0 +1,15 @@
+{
+  "name": "suitestream-device-proxy",
+  "version": "1.0.0",
+  "description": "Proxy container: serve onboarding code + relay socket.io commands to local ADB/CEC",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.5.0",
+    "express": "^4.18.2",
+    "socket.io-client": "^4.7.2",
+    "jsdom": "^22.1.0"
+  }
+}
