@@ -4,7 +4,6 @@ const express = require('express');
 const axios = require('axios');
 const { io } = require('socket.io-client');
 const { spawn } = require('child_process');
-const fs = require('fs');
 
 const app = express();
 
@@ -12,16 +11,13 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
 // CENTRAL_URL should be your base server endpoint (no trailing "/connect")
-const CENTRAL_URL = process.env.CENTRAL_URL || 'https://soundscreen.soundcheckvn.com';
+const CENTRAL_URL = process.env.CENTRAL_URL || 'http://soundscreen.soundcheckvn.com';
 
 // CONNECT_URL can be explicitly set to the full "/connect" path.
 // If not provided, we append "/connect" to CENTRAL_URL.
 const CONNECT_URL = process.env.CONNECT_URL || `${CENTRAL_URL}/connect`;
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || '3000', 10);
-
-// Path where we persist the deviceJWT on disk
-const JWT_PATH = '/data/device_jwt.txt';
 
 let verificationCode = null;
 let token = null;
@@ -117,13 +113,6 @@ async function pollForJwt() {
 
     if (data.status === 'registered' && data.jwt) {
       token = data.jwt;
-      // Persist the JWT to disk so we can reconnect after a reboot
-      try {
-        fs.writeFileSync(JWT_PATH, token, 'utf8');
-        console.log(`💾 Saved JWT to ${JWT_PATH}`);
-      } catch (e) {
-        console.error(`❌ Failed to write JWT to disk: ${e.message}`);
-      }
       console.log('✅ Received JWT:', token);
       startSocketIO();
     } else {
@@ -145,7 +134,7 @@ function startSocketIO() {
   }
   console.log('🌐 Connecting to Socket.IO server at', CENTRAL_URL);
   socket = io(CENTRAL_URL, {
-    path: '/controllers/socket.io',
+    path: '/socket.io',
     auth: { deviceJwt: token },
   });
 
@@ -204,17 +193,14 @@ function runLocal(binary, args) {
 /**
  * 5) “GET /” endpoint for status checks:
  *    • No code & no token → “Connecting… please wait”
- *    • code but no token → show the numeric code (with auto-refresh every 4 minutes)
+ *    • code but no token → show the numeric code
  *    • token present → “Device Connected”
  */
 app.get('/', (req, res) => {
   if (!verificationCode && !token) {
     return res.send(`
       <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Suitestream Onboard</title>
-        </head>
+        <head><meta charset="utf-8"><title>Suitestream Onboard</title></head>
         <body style="background:#222;color:#fff;font-family:sans-serif;text-align:center;padding-top:20vh;">
           <h1>Connecting… please wait</h1>
         </body>
@@ -224,11 +210,7 @@ app.get('/', (req, res) => {
   if (verificationCode && !token) {
     return res.send(`
       <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Enter Code</title>
-          <meta http-equiv="refresh" content="240"> <!-- Refresh page every 4 minutes -->
-        </head>
+        <head><meta charset="utf-8"><title>Enter Code</title></head>
         <body style="background:#222;color:#fff;font-family:sans-serif;text-align:center;padding-top:15vh;">
           <h1>Your Verification Code:</h1>
           <div style="font-size:4rem;letter-spacing:0.2rem;margin:1rem 0;color:#0f0;">${verificationCode}</div>
@@ -255,21 +237,6 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🌐 Onboard HTTP listening on port ${PORT}`);
   (async () => {
-    // If a JWT was previously saved, read it and connect immediately
-    if (fs.existsSync(JWT_PATH)) {
-      try {
-        const saved = fs.readFileSync(JWT_PATH, 'utf8').trim();
-        if (saved) {
-          token = saved;
-          console.log(`🔄 Found existing JWT on disk; connecting to socket...`);
-          return startSocketIO();
-        }
-      } catch (e) {
-        console.error(`❌ Error reading existing JWT from disk: ${e.message}`);
-      }
-    }
-
-    // Otherwise, fetch a new verification code and register
     let gotCode = false;
     while (!gotCode) {
       gotCode = await fetchVerificationCode();

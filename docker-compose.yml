@@ -64,6 +64,7 @@ services:
       - /dev/bus/usb:/dev/bus/usb
     volumes:
       - "/:/host:rw"
+      - "./data:/data"
     environment:
       # Point to your central server
       - CENTRAL_URL=https://soundscreen.soundcheckvn.com
