@@ -37,7 +37,6 @@ async function fetchVerificationCode() {
     const resp = await axios.get(CONNECT_URL, {
       timeout: 5000,
       headers: {
-        // Spoof a browser UA so the server returns full HTML
         'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/88.0 Safari/537.36'
       }
     });
@@ -45,7 +44,6 @@ async function fetchVerificationCode() {
     const html = resp.data;
     console.log('📄 Fetched HTML (first 500 chars):\n', html.slice(0, 500).replace(/\n/g, '\\n'));
 
-    // Look for <div id="verification-code">  204997  </div>
     const match = html.match(/<div\s+id="verification-code">\s*([\dA-Za-z]+)\s*<\/div>/i);
     if (match && match[1]) {
       verificationCode = match[1].trim();
@@ -72,7 +70,7 @@ async function registerDevice() {
   }
 
   const browserDetails = {
-    userAgent: 'NodeJS/axios',    // not a real browser
+    userAgent: 'NodeJS/axios',
     screenWidth: null,
     screenHeight: null,
     language: null,
@@ -95,7 +93,6 @@ async function registerDevice() {
     console.error('❌ Error sending initial device-status POST:', e.message);
   }
 
-  // Begin polling for JWT
   pollForJwt();
 }
 
@@ -117,7 +114,6 @@ async function pollForJwt() {
 
     if (data.status === 'registered' && data.jwt) {
       token = data.jwt;
-      // Persist the JWT to disk so we can reconnect after a reboot
       try {
         fs.writeFileSync(JWT_PATH, token, 'utf8');
         console.log(`💾 Saved JWT to ${JWT_PATH}`);
@@ -143,35 +139,48 @@ function startSocketIO() {
     console.warn('⚠️  startSocketIO called without token. Aborting.');
     return;
   }
+
   console.log('🌐 Connecting to Socket.IO server at', CENTRAL_URL);
   socket = io(CENTRAL_URL, {
     path: '/controllers/socket.io',
     auth: { deviceJwt: token },
+    reconnection: true,
+  });
+
+  // Handle invalid/expired JWT
+  socket.on('connect_error', async (err) => {
+    console.error('🔴 Socket connect_error:', err.message);
+    if (err.message.includes('Authentication error') || err.message.includes('invalid token')) {
+      console.warn('🗑️  Invalid JWT detected; clearing and re-onboarding');
+      try { fs.unlinkSync(JWT_PATH); } catch (_) {}
+      token = null;
+      verificationCode = null;
+      let gotCode = false;
+      while (!gotCode) {
+        gotCode = await fetchVerificationCode();
+        if (!gotCode) await new Promise(r => setTimeout(r, 2000));
+      }
+      registerDevice();
+    }
   });
 
   socket.on('connect', () => {
     console.log('🟢 Socket.io connected as', socket.id);
   });
 
-  socket.on('disconnect', () => {
-    console.warn('🔴 Socket disconnected; attempting reconnect...');
+  socket.on('disconnect', (reason) => {
+    console.warn(`🔴 Socket disconnected (${reason}); will auto-reconnect`);
   });
 
   socket.on('device-command', async (msg) => {
-    // msg example: { id, type: 'adb' | 'cec-client', args: [ … ] }
     console.log('⮞ Received device-command:', msg);
-
     try {
       const output = await runLocal(msg.type, msg.args);
       console.log(`✅ Command succeeded. stdout:\n${output}`);
       socket.emit('device-reply', { id: msg.id, status: 'ok' });
     } catch (err) {
       console.error(`❌ Command failed (type=${msg.type}):`, err.message);
-      socket.emit('device-reply', {
-        id: msg.id,
-        status: 'error',
-        error: err.message,
-      });
+      socket.emit('device-reply', { id: msg.id, status: 'error', error: err.message });
     }
   });
 }
@@ -185,36 +194,23 @@ function runLocal(binary, args) {
     const proc = spawn(binary, args);
     let out = '';
     let err = '';
-    proc.stdout.on('data', (b) => {
-      out += b.toString();
-    });
-    proc.stderr.on('data', (b) => {
-      err += b.toString();
-    });
+    proc.stdout.on('data', (b) => { out += b.toString(); });
+    proc.stderr.on('data', (b) => { err += b.toString(); });
     proc.on('exit', (code) => {
-      if (code === 0) {
-        resolve(out);
-      } else {
-        reject(new Error(err.trim() || `Exit code ${code}`));
-      }
+      if (code === 0) resolve(out);
+      else reject(new Error(err.trim() || `Exit code ${code}`));
     });
   });
 }
 
 /**
- * 5) “GET /” endpoint for status checks:
- *    • No code & no token → “Connecting… please wait”
- *    • code but no token → show the numeric code (with auto-refresh every 4 minutes)
- *    • token present → “Device Connected”
+ * 5) “GET /” endpoint for status checks
  */
 app.get('/', (req, res) => {
   if (!verificationCode && !token) {
     return res.send(`
       <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Suitestream Onboard</title>
-        </head>
+        <head><meta charset="utf-8"><title>Suitestream Onboard</title></head>
         <body style="background:#222;color:#fff;font-family:sans-serif;text-align:center;padding-top:20vh;">
           <h1>Connecting… please wait</h1>
         </body>
@@ -227,7 +223,7 @@ app.get('/', (req, res) => {
         <head>
           <meta charset="utf-8">
           <title>Enter Code</title>
-          <meta http-equiv="refresh" content="240"> <!-- Refresh page every 4 minutes -->
+          <meta http-equiv="refresh" content="240">
         </head>
         <body style="background:#222;color:#fff;font-family:sans-serif;text-align:center;padding-top:15vh;">
           <h1>Your Verification Code:</h1>
@@ -250,12 +246,10 @@ app.get('/', (req, res) => {
 
 /**
  * 6) Start the HTTP server, then attempt to fetch the verification code.
- *    Once obtained, call registerDevice() which does the initial POST and starts pollForJwt().
  */
 app.listen(PORT, () => {
   console.log(`🌐 Onboard HTTP listening on port ${PORT}`);
   (async () => {
-    // If a JWT was previously saved, read it and connect immediately
     if (fs.existsSync(JWT_PATH)) {
       try {
         const saved = fs.readFileSync(JWT_PATH, 'utf8').trim();
@@ -269,7 +263,6 @@ app.listen(PORT, () => {
       }
     }
 
-    // Otherwise, fetch a new verification code and register
     let gotCode = false;
     while (!gotCode) {
       gotCode = await fetchVerificationCode();
