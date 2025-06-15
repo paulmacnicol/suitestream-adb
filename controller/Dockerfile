@@ -21,6 +21,16 @@ RUN apt-get update && \
       cec-utils       \
       iproute2        \
       curl            \
+      python3         \
+      python3-pip     \
+      python3-tk      \ 
+      curl \             
+      rtmpdump \           
+      mosquitto-clients \
+      iputils-ping \       
+      netcat-openbsd \     
+      dnsutils \           
+      
     && rm -rf /var/lib/apt/lists/*
 
 # 2) Create app directory
@@ -29,6 +39,12 @@ WORKDIR /usr/src/app
 # 3) Copy only package.json and install dependencies
 COPY package.json ./
 RUN npm install
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+       pychromecast
+
+EXPOSE 5555
 
 # 4) Copy the rest of your files (index.js, index.html if needed, etc.)
 COPY . .
