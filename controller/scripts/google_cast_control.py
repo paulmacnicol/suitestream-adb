@@ -1,158 +1,214 @@
 #!/usr/bin/env python3
 import sys
-import os
-import logging
+import re
 import json
+import time
+import logging
 import argparse
 import pychromecast
-import tkinter as tk
-from tkinter import messagebox, simpledialog
 
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
 
 current_cast = None
+CONNECT_TIMEOUT = 5
+CONNECT_RETRIES = 3
+RETRY_DELAY = 2
+CAST_PORT = 8009
 
-# ----------------- Core Chromecast Functions -----------------
+def is_ip(source):
+    """Return True if source looks like an IP or IP:port."""
+    return bool(re.match(r'^\d+\.\d+\.\d+\.\d+(:\d+)?$', source))
 
 def list_devices(timeout=5):
-    """Discover and return available Chromecast devices."""
+    logging.info("Discovering Chromecast devices (timeout=%ds)...", timeout)
     chromecasts, browser = pychromecast.get_chromecasts(timeout=timeout)
+    names = [cc.cast_info.friendly_name for cc in chromecasts]
+    logging.info("Found devices: %s", names)
+    browser.stop_discovery()
+    print(json.dumps(names, indent=2))
     return chromecasts
 
+def find_chromecast_by_name(name, timeout=CONNECT_TIMEOUT, retries=CONNECT_RETRIES):
+    """Discover and connect to the Chromecast with the given friendly name."""
+    for attempt in range(1, retries+1):
+        logging.info("Discovering by name '%s' (attempt %d/%d)...", name, attempt, retries)
+        chromecasts, browser = pychromecast.get_chromecasts(timeout=timeout)
+        target = None
+        for cc in chromecasts:
+            fn = cc.cast_info.friendly_name
+            if fn == name:
+                target = cc
+                break
+        browser.stop_discovery()
+        if target:
+            try:
+                target.wait(timeout=timeout)
+                logging.info("Connected to '%s'", name)
+                return target
+            except Exception as e:
+                logging.error("Failed to wait/connect to '%s': %s", name, e)
+        if attempt < retries:
+            time.sleep(RETRY_DELAY)
+    logging.critical("No Chromecast named '%s' found after %d attempts", name, retries)
+    sys.exit(1)
 
-def select_device_by_name(name, timeout=10):
-    """Select and connect to a Chromecast by friendly name."""
-    global current_cast
-    chromecasts, browser = pychromecast.get_chromecasts(timeout=timeout)
-    for cc in chromecasts:
-        if cc.cast_info.friendly_name == name:
-            current_cast = cc
-            current_cast.wait()
-            return current_cast
-    raise ValueError(f"Device '{name}' not found")
-
+def connect_by_ip(host, port=CAST_PORT, timeout=CONNECT_TIMEOUT, retries=CONNECT_RETRIES):
+    """Direct IP connect with retries."""
+    for attempt in range(1, retries+1):
+        try:
+            logging.info("Connecting to %s:%d (attempt %d/%d)...", host, port, attempt, retries)
+            cc = pychromecast.Chromecast(host=host, port=port, timeout=timeout)
+            cc.wait(timeout=timeout)
+            logging.info("Connected to '%s' at %s", cc.cast_info.friendly_name, host)
+            return cc
+        except Exception as e:
+            logging.error("Connection attempt %d failed: %s", attempt, e)
+            if attempt < retries:
+                time.sleep(RETRY_DELAY)
+    logging.critical("Failed to connect to Chromecast at %s after %d attempts", host, retries)
+    sys.exit(1)
 
 def load_media(url, content_type="video/mp4"):
-    """Load media URL onto the current cast."""
-    if not current_cast:
-        raise RuntimeError("No cast selected")
-    current_cast.media_controller.play_media(url, content_type=content_type)
-    current_cast.media_controller.block_until_active()
-
+    logging.info("Loading media '%s' (type=%s)", url, content_type)
+    try:
+        current_cast.media_controller.play_media(url, content_type=content_type)
+        current_cast.media_controller.block_until_active()
+        logging.info("Media playback started")
+    except Exception as e:
+        logging.warning("load_media error: %s -- reconnecting", e)
+        reconnect()
+        current_cast.media_controller.play_media(url, content_type=content_type)
+        current_cast.media_controller.block_until_active()
+        logging.info("Media playback started after retry")
 
 def play():
-    if current_cast:
+    logging.info("Play command")
+    try:
+        current_cast.media_controller.play()
+    except Exception as e:
+        logging.warning("Play error: %s -- reconnecting", e)
+        reconnect()
         current_cast.media_controller.play()
 
-
 def pause():
-    if current_cast:
+    logging.info("Pause command")
+    try:
+        current_cast.media_controller.pause()
+    except Exception as e:
+        logging.warning("Pause error: %s -- reconnecting", e)
+        reconnect()
         current_cast.media_controller.pause()
 
-
 def stop():
-    if current_cast:
+    logging.info("Stop command")
+    try:
+        current_cast.media_controller.stop()
+    except Exception as e:
+        logging.warning("Stop error: %s -- reconnecting", e)
+        reconnect()
         current_cast.media_controller.stop()
 
-
 def seek(seconds):
-    if current_cast:
+    logging.info("Seek to %s seconds", seconds)
+    try:
+        current_cast.media_controller.seek(seconds)
+    except Exception as e:
+        logging.warning("Seek error: %s -- reconnecting", e)
+        reconnect()
         current_cast.media_controller.seek(seconds)
 
-
 def set_volume(level):
-    if current_cast:
+    logging.info("Set volume to %s", level)
+    try:
+        current_cast.set_volume(level)
+    except Exception as e:
+        logging.warning("Set volume error: %s -- reconnecting", e)
+        reconnect()
         current_cast.set_volume(level)
 
-
-def mute(muted=True):
-    if current_cast:
-        current_cast.set_volume_muted(muted)
-
-# ----------------- GUI Functions (unchanged) -----------------
-
-def set_current_cast(cc):
-    global current_cast
-    current_cast = cc
+def mute_device(unmute=False):
+    action = "Unmuting" if unmute else "Muting"
+    logging.info("%s device", action)
     try:
-        current_cast.wait()
+        current_cast.set_volume_muted(not unmute)
     except Exception as e:
-        logging.error("Error during cast.wait(): %s", e)
-        messagebox.showerror("Error", f"Error waiting for device: {e}")
-        return
-    try:
-        logging.debug("Now connected to: %s", current_cast.cast_info.friendly_name)
-    except Exception:
-        pass
-    try:
-        current_cast.start_pairing()
-        code = simpledialog.askstring("Pairing", "Enter verification code (if required):")
-        if code and code.strip():
-            current_cast.finish_pairing(code)
-    except Exception:
-        pass
+        logging.warning("Mute error: %s -- reconnecting", e)
+        reconnect()
+        current_cast.set_volume_muted(not unmute)
 
+def reconnect():
+    """Re‐establish the connection to `current_cast`."""
+    global current_cast
+    name = current_cast.cast_info.friendly_name
+    host = current_cast.host
+    port = current_cast.port
+    logging.info("Reconnecting to '%s' at %s:%d...", name, host, port)
+    current_cast = connect_by_ip(host, port)
 
-def update_receiver_status(status_var, root):
-    if current_cast:
-        try:
-            st = current_cast.status
-            status_var.set(f"Receiver: {st.status_text or 'Idle'} | Volume: {st.volume_level:.2f} (muted: {st.volume_muted})")
-        except Exception:
-            status_var.set("Error getting receiver status")
-    root.after(5000, lambda: update_receiver_status(status_var, root))
-
-
-def update_media_status(media_status_var, root):
-    if current_cast:
-        try:
-            mc = current_cast.media_controller.status
-            media_status_var.set(f"State: {mc.player_state} | Time: {mc.current_time}/{mc.duration}")
-        except Exception:
-            media_status_var.set("Error getting media status")
-    root.after(5000, lambda: update_media_status(media_status_var, root))
-
-
-def build_cast_controller(parent):
-    frame = tk.Frame(parent, padx=10, pady=10)
-    frame.pack(fill="both", expand=True)
-    # ... GUI build unchanged (omitted for brevity) ...
-    pass
-
-# ----------------- CLI Entry Point -----------------
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Chromecast control CLI')
     sub = parser.add_subparsers(dest='cmd', required=True)
 
-    sub.add_parser('list', help='List available Chromecast devices')
+    # list
+    sub.add_parser('list', help='Discover Chromecast devices')
 
-    sel = sub.add_parser('select', help='Select a Chromecast by name')
-    sel.add_argument('name', help='Friendly name of device')
+    # connect by name
+    connect_p = sub.add_parser('connect', help='Resolve and connect by friendly name')
+    connect_p.add_argument('name', help='Friendly name of the Chromecast')
 
-    load = sub.add_parser('load', help='Load media URL')
-    load.add_argument('url', help='Media URL to load')
-    load.add_argument('--type', default='video/mp4', help='Content type')
+    # other commands need -s/--source
+    def add_common(cmd, help_text):
+        p = sub.add_parser(cmd, help=help_text)
+        p.add_argument('-s', '--source', required=True,
+                       help='Name or IP of Chromecast (e.g. "Bedroom TV" or 192.168.0.175)')
+        return p
 
-    sub.add_parser('play', help='Play media')
-    sub.add_parser('pause', help='Pause media')
-    sub.add_parser('stop', help='Stop media')
+    load_p = add_common('load', 'Load media URL')
+    load_p.add_argument('url', help='Media URL to load')
+    load_p.add_argument('--type', default='video/mp4', help='Content type')
 
-    seek_p = sub.add_parser('seek', help='Seek to seconds')
+    add_common('play', 'Play media')
+    add_common('pause', 'Pause media')
+    add_common('stop', 'Stop media')
+
+    seek_p = add_common('seek', 'Seek to position')
     seek_p.add_argument('seconds', type=float, help='Seconds to seek to')
 
-    vol = sub.add_parser('vol', help='Set volume')
-    vol.add_argument('level', type=float, help='Volume level 0.0-1.0')
+    vol_p = add_common('vol', 'Set volume level')
+    vol_p.add_argument('level', type=float, help='Volume level between 0.0 and 1.0')
 
-    mute_p = sub.add_parser('mute', help='Mute/unmute')
-    mute_p.add_argument('--unmute', action='store_true', help='Unmute if set')
+    mute_p = add_common('mute', 'Mute/unmute')
+    mute_p.add_argument('--unmute', action='store_true',
+                        help='If set, unmute instead of mute')
 
     args = parser.parse_args()
+
+    # LIST
     if args.cmd == 'list':
-        devices = list_devices()
-        print(json.dumps([cc.cast_info.friendly_name for cc in devices], indent=2))
-    elif args.cmd == 'select':
-        select_device_by_name(args.name)
-    elif args.cmd == 'load':
+        list_devices()
+        sys.exit(0)
+
+    # CONNECT
+    if args.cmd == 'connect':
+        cc = find_chromecast_by_name(args.name)
+        sys.exit(0)
+
+    # OTHER COMMANDS
+    source = args.source
+    if is_ip(source):
+        host, *port = source.split(':')
+        port = int(port[0]) if port else CAST_PORT
+        current_cast = connect_by_ip(host, port)
+    else:
+        current_cast = find_chromecast_by_name(source)
+
+    # DISPATCH
+    if args.cmd == 'load':
         load_media(args.url, args.type)
     elif args.cmd == 'play':
         play()
@@ -165,4 +221,6 @@ if __name__ == '__main__':
     elif args.cmd == 'vol':
         set_volume(args.level)
     elif args.cmd == 'mute':
-        mute(not args.unmute)
+        mute_device(unmute=args.unmute)
+
+    logging.info("Command '%s' completed", args.cmd)

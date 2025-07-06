@@ -8,28 +8,16 @@ const fs = require('fs');
 
 const app = express();
 
-// Read from env (default to 8080)
 const PORT = parseInt(process.env.PORT || '8080', 10);
-
-// CENTRAL_URL should be your base server endpoint (no trailing "/connect")
 const CENTRAL_URL = process.env.CENTRAL_URL || 'https://soundscreen.soundcheckvn.com';
-
-// CONNECT_URL can be explicitly set to the full "/connect" path.
-// If not provided, we append "/connect" to CENTRAL_URL.
 const CONNECT_URL = process.env.CONNECT_URL || `${CENTRAL_URL}/connect`;
-
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || '3000', 10);
-
-// Path where we persist the deviceJWT on disk
 const JWT_PATH = '/data/device_jwt.txt';
 
 let verificationCode = null;
 let token = null;
 let socket = null;
 
-/**
- * Fetch verification code HTML and extract the code.
- */
 async function fetchVerificationCode() {
   try {
     console.log(`🔍 Attempting GET ${CONNECT_URL}`);
@@ -53,9 +41,6 @@ async function fetchVerificationCode() {
   }
 }
 
-/**
- * Send initial device-status POST then start polling for JWT.
- */
 async function registerDevice() {
   if (!verificationCode) {
     setTimeout(registerDevice, 2000);
@@ -71,9 +56,6 @@ async function registerDevice() {
   pollForJwt();
 }
 
-/**
- * Poll until server returns a JWT, then connect via Socket.IO.
- */
 async function pollForJwt() {
   const statusUrl = `${CENTRAL_URL}/api/devices/device-status`;
   try {
@@ -82,7 +64,12 @@ async function pollForJwt() {
     console.log('🔄 Poll response:', data);
     if (data.status === 'registered' && data.jwt) {
       token = data.jwt;
-      try { fs.writeFileSync(JWT_PATH, token, 'utf8'); console.log('💾 JWT saved'); } catch (e) { console.error('❌ JWT write error:', e.message); }
+      try {
+        fs.writeFileSync(JWT_PATH, token, 'utf8');
+        console.log('💾 JWT saved');
+      } catch (e) {
+        console.error('❌ JWT write error:', e.message);
+      }
       startSocketIO();
     } else {
       setTimeout(pollForJwt, POLL_INTERVAL_MS);
@@ -93,9 +80,6 @@ async function pollForJwt() {
   }
 }
 
-/**
- * Connect to controllers container via Socket.IO and handle commands.
- */
 function startSocketIO() {
   if (!token) {
     console.warn('⚠️ No token; aborting startSocketIO');
@@ -104,24 +88,26 @@ function startSocketIO() {
   console.log('🌐 Connecting Socket.IO to', CENTRAL_URL);
   socket = io(CENTRAL_URL, {
     path: '/controllers/socket.io',
+    transports: ['websocket'],
     auth: { deviceJwt: token },
     reconnection: true
   });
 
   socket.on('connect', () => console.log('🟢 Connected as', socket.id));
-  socket.on('disconnect', () => console.warn('🔴 Disconnected; retrying'));  
+  socket.on('disconnect', () => console.warn('🔴 Disconnected; retrying'));
   socket.on('connect_error', async (err) => {
     console.error('🔴 Connect error:', err.message);
     if (/invalid token|Authentication error/i.test(err.message)) {
       console.warn('🗑️ Clearing token & restarting onboarding');
-      try { fs.unlinkSync(JWT_PATH); } catch {};
+      try { fs.unlinkSync(JWT_PATH); } catch {}
       token = null; verificationCode = null;
-      while (!await fetchVerificationCode()) await new Promise(r => setTimeout(r,2000));
+      while (!await fetchVerificationCode()) {
+        await new Promise(r => setTimeout(r,2000));
+      }
       registerDevice();
     }
   });
 
-  // Handle incoming device-command with acknowledgement
   socket.on('device-command', async (msg, ack) => {
     console.log('⮞ Received device-command:', msg);
     try {
@@ -135,9 +121,6 @@ function startSocketIO() {
   });
 }
 
-/**
- * Spawn a local process and collect its output.
- */
 function runLocal(binary, args) {
   return new Promise((resolve, reject) => {
     console.log(`💻 Spawning ${binary} ${args.join(' ')}`);
@@ -149,22 +132,29 @@ function runLocal(binary, args) {
   });
 }
 
-// HTTP GET / for status page
 app.get('/', (req, res) => {
   if (!verificationCode && !token) return res.send('<h1>Connecting… please wait</h1>');
   if (verificationCode && !token) return res.send(`<h1>Code: ${verificationCode}</h1>`);
   return res.send('<h1>Device Connected ✅</h1>');
 });
 
-// Start server and onboarding
 app.listen(PORT, async () => {
   console.log(`🌐 HTTP listening on ${PORT}`);
   if (fs.existsSync(JWT_PATH)) {
     try {
       const saved = fs.readFileSync(JWT_PATH,'utf8').trim();
-      if (saved) { token = saved; console.log('🔄 Using saved JWT'); startSocketIO(); return; }
-    } catch (e) { console.error('❌ JWT read error:', e.message); }
+      if (saved) {
+        token = saved;
+        console.log('🔄 Using saved JWT');
+        startSocketIO();
+        return;
+      }
+    } catch (e) {
+      console.error('❌ JWT read error:', e.message);
+    }
   }
-  while (!await fetchVerificationCode()) await new Promise(r => setTimeout(r,2000));
+  while (!await fetchVerificationCode()) {
+    await new Promise(r => setTimeout(r,2000));
+  }
   registerDevice();
 });
