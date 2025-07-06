@@ -1,8 +1,8 @@
-# /home/gc/suitestream-adb/controller/Dockerfile
+# File: Dockerfile
 
 FROM node:16-bullseye-slim
 
-# 1) Install ADB + CEC + Python3 + utilities
+# 1) Install ADB, CEC, and networking tools
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       android-tools-adb \
@@ -13,33 +13,19 @@ RUN apt-get update && \
       mosquitto-clients \
       iputils-ping \
       netcat-openbsd \
-      dnsutils \
-      python3 \
-      python3-pip \
-      python3-tk && \
+      dnsutils && \
     rm -rf /var/lib/apt/lists/*
 
-# 2) Make "python" point to python3, and "pip" to pip3
-RUN ln -sf /usr/bin/python3 /usr/bin/python && \
-    ln -sf /usr/bin/pip3   /usr/bin/pip
-
-# 3) Set working directory
+# 2) Set working directory
 WORKDIR /usr/src/app
 
-# 4) Copy and install Node.js dependencies
+# 3) Copy and install Node.js dependencies
 COPY package.json package-lock.json* ./
 RUN npm install --production
 
-# 5) Copy in your application code
+# 4) Copy application code
 COPY . .
 
-# 6) Install Python dependencies
-RUN pip install pychromecast
-
-# 7) Expose ports
-#EXPOSE 80    # your proxy server
-#EXPOSE 5555  # adb default port (if you need it mapped)
-
-# 8) Default startup
+# 5) Expose port and start
 ENV PORT=80
 CMD ["node", "index.js"]
